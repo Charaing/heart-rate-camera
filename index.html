@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#0d0b0f">
+<title>심박 · 손가락 심박수 측정</title>
+<style>
+  :root {
+    --bg: #0d0b0f;
+    --panel: #17141a;
+    --line: #2a2530;
+    --text: #f3eef4;
+    --muted: #9a90a0;
+    --accent: #ff3b5c;
+    --accent-soft: rgba(255, 59, 92, .15);
+    --ok: #38d39f;
+    --warn: #ffb547;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { height: 100%; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Apple SD Gothic Neo", "Pretendard", "Noto Sans KR", "Segoe UI", sans-serif;
+    display: flex; justify-content: center;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    width: 100%; max-width: 440px;
+    padding: calc(20px + env(safe-area-inset-top)) 20px calc(24px + env(safe-area-inset-bottom));
+    display: flex; flex-direction: column; gap: 18px;
+  }
+  header { display: flex; align-items: baseline; justify-content: space-between; }
+  header h1 { font-size: 20px; font-weight: 700; letter-spacing: -.02em; }
+  header h1 span { color: var(--accent); }
+  header small { color: var(--muted); font-size: 12px; }
+
+  .dial {
+    position: relative; aspect-ratio: 1; width: 100%; max-width: 300px; margin: 6px auto 0;
+    display: grid; place-items: center;
+  }
+  .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
+  .dial .track { stroke: var(--line); }
+  .dial .prog { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .25s linear; }
+  .readout { text-align: center; }
+  .bpm { font-size: 84px; font-weight: 800; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .bpm.dim { color: var(--line); }
+  .unit { color: var(--muted); font-size: 14px; margin-top: 6px; display: flex; gap: 6px; align-items: center; justify-content: center; }
+  .heart { width: 16px; height: 16px; fill: var(--accent); transform-origin: center; }
+  .heart.beat { animation: beat .32s ease-out; }
+  @keyframes beat { 0% { transform: scale(1.45); } 100% { transform: scale(1); } }
+
+  .status {
+    text-align: center; font-size: 15px; min-height: 22px; color: var(--muted);
+    transition: color .2s;
+  }
+  .status.ok { color: var(--ok); }
+  .status.warn { color: var(--warn); }
+
+  .wave {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
+    height: 110px; overflow: hidden; position: relative;
+  }
+  .wave canvas { width: 100%; height: 100%; display: block; }
+  .preview {
+    position: absolute; right: 10px; top: 10px; width: 44px; height: 44px; border-radius: 50%;
+    object-fit: cover; border: 2px solid var(--line); background: #000;
+  }
+
+  button.main {
+    appearance: none; border: 0; border-radius: 16px; padding: 18px;
+    background: var(--accent); color: #fff; font-size: 17px; font-weight: 700; font-family: inherit;
+    cursor: pointer; transition: transform .1s, opacity .2s;
+  }
+  button.main:active { transform: scale(.98); }
+  button.main.stop { background: var(--panel); color: var(--text); border: 1px solid var(--line); }
+
+  .card {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 16px; padding: 16px;
+  }
+  .card h2 { font-size: 13px; color: var(--muted); font-weight: 600; margin-bottom: 10px; }
+  .how { list-style: none; display: grid; gap: 8px; font-size: 14px; line-height: 1.45; }
+  .how li { display: flex; gap: 10px; }
+  .how b { color: var(--accent); min-width: 14px; }
+
+  .history { list-style: none; display: grid; gap: 2px; }
+  .history li {
+    display: flex; justify-content: space-between; padding: 8px 0; font-size: 14px;
+    border-bottom: 1px solid var(--line); font-variant-numeric: tabular-nums;
+  }
+  .history li:last-child { border-bottom: 0; }
+  .history .v { font-weight: 700; }
+  .history .t { color: var(--muted); }
+  .empty { color: var(--muted); font-size: 14px; }
+  .row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+  .row h2 { margin: 0; }
+  .link { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; font-family: inherit; }
+
+  .note { color: var(--muted); font-size: 11.5px; line-height: 1.5; text-align: center; }
+  video.hidden-video { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1><span>♥</span> 심박</h1>
+    <small>카메라 PPG 심박수 측정</small>
+  </header>
+
+  <div class="dial">
+    <svg viewBox="0 0 120 120" aria-hidden="true">
+      <circle class="track" cx="60" cy="60" r="54" fill="none" stroke-width="6"/>
+      <circle class="prog" id="prog" cx="60" cy="60" r="54" fill="none" stroke-width="6"
+              stroke-dasharray="339.29" stroke-dashoffset="339.29"/>
+    </svg>
+    <div class="readout">
+      <div class="bpm dim" id="bpm">--</div>
+      <div class="unit">
+        <svg class="heart" id="heart" viewBox="0 0 24 24"><path d="M12 21s-7.5-4.6-10-9.3C.3 8.4 2.2 4 6.3 4c2.3 0 3.9 1.3 5.7 3.4C13.8 5.3 15.4 4 17.7 4 21.8 4 23.7 8.4 22 11.7 19.5 16.4 12 21 12 21z"/></svg>
+        BPM
+      </div>
+    </div>
+  </div>
+
+  <div class="status" id="status">시작 버튼을 눌러주세요</div>
+
+  <div class="wave">
+    <canvas id="wave"></canvas>
+    <video class="preview" id="video" playsinline muted autoplay hidden></video>
+  </div>
+
+  <button class="main" id="btn">측정 시작</button>
+
+  <section class="card">
+    <h2>측정 방법</h2>
+    <ul class="how">
+      <li><b>1</b>휴대폰 뒷면 카메라와 플래시를 검지 끝으로 함께 덮어주세요.</li>
+      <li><b>2</b>너무 세게 누르지 말고 살짝 대기만 하세요. 화면 원이 빨갛게 보이면 정상입니다.</li>
+      <li><b>3</b>측정이 끝날 때까지(약 25초) 움직이지 말고 가만히 계세요.</li>
+    </ul>
+  </section>
+
+  <section class="card">
+    <div class="row">
+      <h2>측정 기록</h2>
+      <button class="link" id="clear">기록 삭제</button>
+    </div>
+    <ul class="history" id="history"></ul>
+  </section>
+
+  <p class="note">
+    이 앱은 의료기기가 아니며 결과는 참고용입니다. 모든 처리는 기기 안에서만 이루어지고 영상은 저장·전송되지 않습니다.<br>
+    플래시 제어는 안드로이드 Chrome에서 지원됩니다. iPhone에서는 플래시가 켜지지 않을 수 있으니 밝은 곳에서 측정하세요.
+  </p>
+</main>
+
+<script>
+(() => {
+  // ---------- 설정 ----------
+  const MEASURE_SEC = 25;      // 손가락 접촉 후 측정 시간
+  const WARMUP_SEC = 3;        // 노출/화이트밸런스 안정화 시간 (데이터 무시)
+  const MIN_BPM = 40, MAX_BPM = 200;
+  const WINDOW_SEC = 12;       // 실시간 계산에 쓰는 구간
+  const SAMPLE_W = 40, SAMPLE_H = 30;
+
+  // ---------- 엘리먼트 ----------
+  const $ = id => document.getElementById(id);
+  const video = $('video'), btn = $('btn'), statusEl = $('status'), bpmEl = $('bpm');
+  const heart = $('heart'), prog = $('prog'), wave = $('wave'), historyEl = $('history');
+  const CIRC = 2 * Math.PI * 54;
+
+  const sampler = document.createElement('canvas');
+  sampler.width = SAMPLE_W; sampler.height = SAMPLE_H;
+  const sctx = sampler.getContext('2d', { willReadFrequently: true });
+  const wctx = wave.getContext('2d');
+
+  // ---------- 상태 ----------
+  let stream = null, track = null, running = false, rafId = null;
+  let samples = [];            // {t, v}
+  let contactStart = null;     // 손가락 접촉 시작 시각(ms)
+  let lastPeakT = 0;
+  let liveBpm = null;
+
+  // ---------- 유틸 ----------
+  const setStatus = (msg, cls = '') => { statusEl.textContent = msg; statusEl.className = 'status ' + cls; };
+  const setProgress = p => { prog.style.strokeDashoffset = CIRC * (1 - Math.max(0, Math.min(1, p))); };
+  const median = a => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+
+  function showBpm(v) {
+    if (v == null || !isFinite(v)) { bpmEl.textContent = '--'; bpmEl.classList.add('dim'); return; }
+    bpmEl.textContent = Math.round(v); bpmEl.classList.remove('dim');
+  }
+  function pulse() {
+    heart.classList.remove('beat'); void heart.offsetWidth; heart.classList.add('beat');
+    if (navigator.vibrate) { /* 진동은 측정에 방해되므로 사용하지 않음 */ }
+  }
+
+  // ---------- 카메라 ----------
+  async function setTorch(t, on) {
+    try {
+      const caps = t.getCapabilities ? t.getCapabilities() : {};
+      if (!caps.torch) return false;
+      await t.applyConstraints({ advanced: [{ torch: on }] });
+      return true;
+    } catch { return false; }
+  }
+
+  async function openCamera() {
+    const base = { width: { ideal: 320 }, height: { ideal: 240 }, frameRate: { ideal: 30 } };
+    let s = await navigator.mediaDevices.getUserMedia({ video: { ...base, facingMode: { ideal: 'environment' } }, audio: false });
+    let t = s.getVideoTracks()[0];
+    if (await setTorch(t, true)) return { s, t, torch: true };
+
+    // 후면 카메라가 여러 개인 폰: 플래시를 지원하는 카메라 찾기
+    try {
+      const devices = (await navigator.mediaDevices.enumerateDevices()).filter(d => d.kind === 'videoinput');
+      const currentId = t.getSettings().deviceId;
+      const backs = devices.filter(d => d.deviceId !== currentId && /back|rear|environment|후면/i.test(d.label));
+      for (const d of backs) {
+        let s2;
+        try {
+          s.getTracks().forEach(x => x.stop());
+          s2 = await navigator.mediaDevices.getUserMedia({ video: { ...base, deviceId: { exact: d.deviceId } }, audio: false });
+        } catch { continue; }
+        const t2 = s2.getVideoTracks()[0];
+        if (await setTorch(t2, true)) return { s: s2, t: t2, torch: true };
+        s = s2; t = t2;
+      }
+    } catch { /* 무시 */ }
+    return { s, t, torch: false };
+  }
+
+  async function start() {
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setStatus('이 브라우저는 카메라를 지원하지 않습니다', 'warn'); return;
+    }
+    btn.disabled = true;
+    setStatus('카메라 켜는 중…');
+    try {
+      const r = await openCamera();
+      stream = r.s; track = r.t;
+      video.srcObject = stream;
+      video.hidden = false;
+      await video.play();
+      running = true;
+      samples = []; contactStart = null; liveBpm = null;
+      showBpm(null); setProgress(0);
+      btn.textContent = '중지'; btn.classList.add('stop');
+      setStatus(r.torch ? '손가락으로 카메라와 플래시를 덮어주세요' : '플래시를 켤 수 없어요. 밝은 곳에서 손가락으로 카메라를 덮어주세요', r.torch ? '' : 'warn');
+      loop();
+    } catch (e) {
+      console.error(e);
+      setStatus(e.name === 'NotAllowedError' ? '카메라 권한을 허용해주세요' : '카메라를 열 수 없습니다', 'warn');
+      stop(false);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  function stop(resetText = true) {
+    running = false;
+    if (rafId) cancelAnimationFrame(rafId);
+    if (track) setTorch(track, false);
+    if (stream) stream.getTracks().forEach(t => t.stop());
+    stream = null; track = null;
+    video.srcObject = null; video.hidden = true;
+    btn.textContent = '측정 시작'; btn.classList.remove('stop');
+    if (resetText) { setProgress(0); }
+  }
+
+  // ---------- 프레임 처리 ----------
+  function readFrame() {
+    sctx.drawImage(video, 0, 0, SAMPLE_W, SAMPLE_H);
+    const d = sctx.getImageData(0, 0, SAMPLE_W, SAMPLE_H).data;
+    let r = 0, g = 0, b = 0;
+    const n = d.length / 4;
+    for (let i = 0; i < d.length; i += 4) { r += d[i]; g += d[i + 1]; b += d[i + 2]; }
+    return { r: r / n, g: g / n, b: b / n };
+  }
+
+  function fingerOn({ r, g, b }) {
+    // 손가락이 렌즈를 덮으면 화면이 거의 빨간색으로 채워짐
+    return r > 90 && r > g * 1.6 && r > b * 1.6;
+  }
+
+  function loop() {
+    if (!running) return;
+    rafId = requestAnimationFrame(loop);
+    if (video.readyState < 2) return;
+
+    const now = performance.now();
+    const c = readFrame();
+
+    if (!fingerOn(c)) {
+      if (contactStart !== null) setStatus('손가락이 떨어졌어요. 다시 덮어주세요', 'warn');
+      contactStart = null; samples = []; liveBpm = null;
+      showBpm(null); setProgress(0); drawWave([]);
+      return;
+    }
+
+    if (contactStart === null) {
+      contactStart = now;
+      setStatus('신호 안정화 중… 움직이지 마세요');
+    }
+    const elapsed = (now - contactStart) / 1000;
+    if (elapsed < WARMUP_SEC) { setProgress(elapsed / (MEASURE_SEC + WARMUP_SEC)); return; }
+
+    // 혈액량이 늘면 빛 흡수가 늘어 밝기가 줄어든다 → 부호 반전
+    samples.push({ t: now / 1000, v: -c.r });
+    const cutoff = now / 1000 - WINDOW_SEC - 2;
+    while (samples.length && samples[0].t < cutoff) samples.shift();
+
+    const res = analyze(samples);
+    drawWave(res.filtered, res.peaks);
+
+    if (res.peaks.length) {
+      const lp = res.peaks[res.peaks.length - 1];
+      if (lp.t > lastPeakT + 0.2 && now / 1000 - lp.t < 0.5) { lastPeakT = lp.t; pulse(); }
+    }
+
+    const measured = elapsed - WARMUP_SEC;
+    setProgress(elapsed / (MEASURE_SEC + WARMUP_SEC));
+    if (measured > 5 && res.bpm) {
+      liveBpm = liveBpm == null ? res.bpm : liveBpm * 0.8 + res.bpm * 0.2;
+      showBpm(liveBpm);
+      setStatus(res.quality > 0.6 ? '측정 중… 좋은 신호입니다' : '측정 중… 손가락을 살짝만 대주세요', res.quality > 0.6 ? 'ok' : '');
+    } else if (measured <= 5) {
+      setStatus('측정 중…', 'ok');
+    }
+
+    if (measured >= MEASURE_SEC) finish(res);
+  }
+
+  // ---------- 신호 분석 ----------
+  function analyze(s) {
+    const out = { filtered: [], peaks: [], bpm: null, quality: 0 };
+    if (s.length < 30) return out;
+    const dur = s[s.length - 1].t - s[0].t;
+    const fps = (s.length - 1) / dur;
+
+    // 1) 추세 제거: 약 1초 이동평균 빼기 (고역통과)
+    const hw = Math.max(2, Math.round(fps * 0.5));
+    const v = s.map(x => x.v);
+    const detr = movingAvgSubtract(v, hw);
+    // 2) 평활화: 약 0.12초 이동평균 (저역통과)
+    const sm = movingAvg(detr, Math.max(1, Math.round(fps * 0.06)));
+
+    out.filtered = sm.map((y, i) => ({ t: s[i].t, v: y }));
+
+    // 3) 피크 검출
+    const minGap = 60 / MAX_BPM;
+    const win = Math.max(2, Math.round(fps * 0.25));
+    const std = Math.sqrt(sm.reduce((a, y) => a + y * y, 0) / sm.length) || 1;
+    const peaks = [];
+    for (let i = win; i < sm.length - win; i++) {
+      const y = sm[i];
+      if (y < std * 0.3) continue;
+      let isMax = true;
+      for (let k = i - win; k <= i + win; k++) if (sm[k] > y) { isMax = false; break; }
+      if (!isMax) continue;
+      const t = s[i].t;
+      if (peaks.length && t - peaks[peaks.length - 1].t < minGap) {
+        if (y > peaks[peaks.length - 1].v) peaks[peaks.length - 1] = { t, v: y };
+        continue;
+      }
+      peaks.push({ t, v: y });
+    }
+    out.peaks = peaks;
+
+    // 4) 박동 간격(IBI) → BPM, 이상치 제거
+    const lastT = s[s.length - 1].t;
+    const recent = peaks.filter(p => p.t > lastT - WINDOW_SEC);
+    const ibis = [];
+    for (let i = 1; i < recent.length; i++) ibis.push(recent[i].t - recent[i - 1].t);
+    const valid = ibis.filter(x => x >= 60 / MAX_BPM && x <= 60 / MIN_BPM);
+    if (valid.length < 3) return out;
+    const m = median(valid);
+    const good = valid.filter(x => Math.abs(x - m) / m < 0.25);
+    out.quality = good.length / ibis.length;
+
+    // 5) 자기상관으로 교차검증 (피크 검출이 이중/누락될 때 보정)
+    const acBpm = autocorrBpm(sm, fps);
+    let bpm = 60 / median(good.length ? good : valid);
+    if (acBpm && Math.abs(acBpm - bpm) / bpm > 0.2 && out.quality < 0.7) bpm = acBpm;
+    out.bpm = bpm;
+    return out;
+  }
+
+  function movingAvg(a, hw) {
+    const n = a.length, out = new Array(n), pre = [0];
+    for (let i = 0; i < n; i++) pre.push(pre[i] + a[i]);
+    for (let i = 0; i < n; i++) {
+      const lo = Math.max(0, i - hw), hi = Math.min(n - 1, i + hw);
+      out[i] = (pre[hi + 1] - pre[lo]) / (hi - lo + 1);
+    }
+    return out;
+  }
+  function movingAvgSubtract(a, hw) { const m = movingAvg(a, hw); return a.map((x, i) => x - m[i]); }
+
+  function autocorrBpm(x, fps) {
+    const n = x.length;
+    const minLag = Math.floor(fps * 60 / MAX_BPM), maxLag = Math.min(n - 10, Math.ceil(fps * 60 / MIN_BPM));
+    if (maxLag <= minLag) return null;
+    let e0 = 0; for (let i = 0; i < n; i++) e0 += x[i] * x[i];
+    if (!e0) return null;
+    let best = -1, bestLag = 0;
+    const r = [];
+    for (let lag = minLag; lag <= maxLag; lag++) {
+      let s = 0; for (let i = 0; i + lag < n; i++) s += x[i] * x[i + lag];
+      s /= e0; r[lag] = s;
+      if (s > best) { best = s; bestLag = lag; }
+    }
+    if (best < 0.3) return null;
+    // 포물선 보간으로 세밀한 주기
+    const a = r[bestLag - 1], b = r[bestLag], c = r[bestLag + 1];
+    let lag = bestLag;
+    if (a != null && c != null) { const den = a - 2 * b + c; if (den) lag += 0.5 * (a - c) / den; }
+    return 60 * fps / lag;
+  }
+
+  // ---------- 결과 ----------
+  function finish(res) {
+    const bpm = liveBpm ?? res.bpm;
+    stop(false);
+    setProgress(1);
+    if (!bpm) {
+      showBpm(null);
+      setStatus('신호가 약해 측정하지 못했어요. 다시 시도해주세요', 'warn');
+      return;
+    }
+    showBpm(bpm);
+    const v = Math.round(bpm);
+    const label = v < 60 ? '안정 시 낮은 편' : v <= 100 ? '정상 범위 (60–100)' : '안정 시 높은 편';
+    setStatus(`측정 완료 · ${label}`, 'ok');
+    saveHistory(v);
+  }
+
+  // ---------- 파형 그리기 ----------
+  function sizeCanvas() {
+    const dpr = window.devicePixelRatio || 1;
+    wave.width = wave.clientWidth * dpr; wave.height = wave.clientHeight * dpr;
+  }
+  function drawWave(f, peaks = []) {
+    const W = wave.width, H = wave.height;
+    wctx.clearRect(0, 0, W, H);
+    if (f.length < 2) {
+      wctx.strokeStyle = '#2a2530'; wctx.lineWidth = 2 * (window.devicePixelRatio || 1);
+      wctx.beginPath(); wctx.moveTo(0, H / 2); wctx.lineTo(W, H / 2); wctx.stroke();
+      return;
+    }
+    const span = 6; // 최근 6초만 표시
+    const t1 = f[f.length - 1].t, t0 = t1 - span;
+    const view = f.filter(p => p.t >= t0);
+    let max = 1e-6; for (const p of view) max = Math.max(max, Math.abs(p.v));
+    const X = t => (t - t0) / span * W, Y = v => H / 2 - v / max * H * 0.38;
+    const dpr = window.devicePixelRatio || 1;
+    wctx.lineWidth = 2.5 * dpr; wctx.strokeStyle = '#ff3b5c'; wctx.lineJoin = 'round';
+    wctx.beginPath();
+    view.forEach((p, i) => i ? wctx.lineTo(X(p.t), Y(p.v)) : wctx.moveTo(X(p.t), Y(p.v)));
+    wctx.stroke();
+    wctx.fillStyle = '#fff';
+    for (const p of peaks) if (p.t >= t0) { wctx.beginPath(); wctx.arc(X(p.t), Y(p.v), 3 * dpr, 0, Math.PI * 2); wctx.fill(); }
+  }
+
+  // ---------- 기록 ----------
+  const KEY = 'simbak-history';
+  const loadHistory = () => { try { return JSON.parse(localStorage.getItem(KEY)) || []; } catch { return []; } };
+  function saveHistory(v) {
+    const h = loadHistory(); h.unshift({ v, t: Date.now() });
+    localStorage.setItem(KEY, JSON.stringify(h.slice(0, 20))); renderHistory();
+  }
+  function renderHistory() {
+    const h = loadHistory();
+    historyEl.innerHTML = h.length ? '' : '<li class="empty">아직 기록이 없어요</li>';
+    for (const { v, t } of h) {
+      const li = document.createElement('li');
+      const d = new Date(t);
+      li.innerHTML = `<span class="t">${d.toLocaleDateString('ko-KR', { month: 'short', day: 'numeric' })} ${d.toLocaleTimeString('ko-KR', { hour: '2-digit', minute: '2-digit' })}</span><span class="v">${v} BPM</span>`;
+      historyEl.appendChild(li);
+    }
+  }
+
+  // ---------- 이벤트 ----------
+  btn.addEventListener('click', () => running ? (stop(), setStatus('측정을 중지했어요'), showBpm(null)) : start());
+  $('clear').addEventListener('click', () => { localStorage.removeItem(KEY); renderHistory(); });
+  document.addEventListener('visibilitychange', () => { if (document.hidden && running) { stop(); setStatus('화면을 벗어나 측정이 중지됐어요', 'warn'); } });
+  window.addEventListener('resize', () => { sizeCanvas(); drawWave([]); });
+
+  sizeCanvas(); drawWave([]); renderHistory();
+})();
+</script>
+</body>
+</html>
