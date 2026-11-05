@@ -43,7 +43,36 @@
   .dial svg { position: absolute; inset: 0; width: 100%; height: 100%; transform: rotate(-90deg); }
   .dial .track { stroke: var(--line); }
   .dial .prog { stroke: var(--accent); stroke-linecap: round; transition: stroke-dashoffset .25s linear; }
-  .readout { text-align: center; }
+  .readout { text-align: center; position: relative; z-index: 1; }
+  .bigheart {
+    position: absolute; width: 62%; height: 62%; fill: var(--accent); opacity: .07;
+    transform-origin: center; transition: opacity .3s;
+  }
+  .bigheart.beat { animation: bigbeat .45s ease-out; }
+  @keyframes bigbeat {
+    0% { transform: scale(1.18); opacity: .38; }
+    100% { transform: scale(1); opacity: .07; }
+  }
+  .dial .glow {
+    position: absolute; inset: 6%; border-radius: 50%;
+    box-shadow: 0 0 0 0 rgba(255, 59, 92, 0); pointer-events: none;
+  }
+  .dial .glow.beat { animation: glow .6s ease-out; }
+  @keyframes glow {
+    0% { box-shadow: 0 0 0 0 rgba(255, 59, 92, .55); }
+    100% { box-shadow: 0 0 0 26px rgba(255, 59, 92, 0); }
+  }
+  .live {
+    display: flex; justify-content: center; gap: 18px; font-size: 13px; color: var(--muted);
+    font-variant-numeric: tabular-nums; min-height: 18px;
+  }
+  .live b { color: var(--text); font-weight: 700; }
+  .tools { display: flex; justify-content: center; gap: 8px; }
+  .chip {
+    appearance: none; border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    border-radius: 999px; padding: 7px 14px; font-size: 13px; font-family: inherit; cursor: pointer;
+  }
+  .chip.on { color: var(--text); border-color: var(--accent); background: var(--accent-soft); }
   .bpm { font-size: 84px; font-weight: 800; letter-spacing: -.04em; line-height: 1; font-variant-numeric: tabular-nums; }
   .bpm.dim { color: var(--line); }
   .unit { color: var(--muted); font-size: 14px; margin-top: 6px; display: flex; gap: 6px; align-items: center; justify-content: center; }
@@ -60,7 +89,7 @@
 
   .wave {
     background: var(--panel); border: 1px solid var(--line); border-radius: 16px;
-    height: 110px; overflow: hidden; position: relative;
+    height: 170px; overflow: hidden; position: relative;
   }
   .wave canvas { width: 100%; height: 100%; display: block; }
   .preview {
@@ -114,6 +143,8 @@
       <circle class="prog" id="prog" cx="60" cy="60" r="54" fill="none" stroke-width="6"
               stroke-dasharray="339.29" stroke-dashoffset="339.29"/>
     </svg>
+    <div class="glow" id="glow"></div>
+    <svg class="bigheart" id="bigheart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 21s-7.5-4.6-10-9.3C.3 8.4 2.2 4 6.3 4c2.3 0 3.9 1.3 5.7 3.4C13.8 5.3 15.4 4 17.7 4 21.8 4 23.7 8.4 22 11.7 19.5 16.4 12 21 12 21z"/></svg>
     <div class="readout">
       <div class="bpm dim" id="bpm">--</div>
       <div class="unit">
@@ -125,9 +156,20 @@
 
   <div class="status" id="status">시작 버튼을 눌러주세요</div>
 
+  <div class="live" id="live">
+    <span>박동 <b id="beats">0</b>회</span>
+    <span>방금 간격 <b id="ibi">-</b></span>
+    <span>순간 <b id="inst">-</b></span>
+  </div>
+
   <div class="wave">
     <canvas id="wave"></canvas>
     <video class="preview" id="video" playsinline muted autoplay hidden></video>
+  </div>
+
+  <div class="tools">
+    <button class="chip" id="soundBtn">🔈 박동음 끔</button>
+    <button class="chip on" id="contBtn">∞ 계속 측정</button>
   </div>
 
   <button class="main" id="btn">측정 시작</button>
@@ -137,7 +179,7 @@
     <ul class="how">
       <li><b>1</b>휴대폰 뒷면 카메라와 플래시를 검지 끝으로 함께 덮어주세요.</li>
       <li><b>2</b>너무 세게 누르지 말고 살짝 대기만 하세요. 화면 원이 빨갛게 보이면 정상입니다.</li>
-      <li><b>3</b>측정이 끝날 때까지(약 25초) 움직이지 말고 가만히 계세요.</li>
+      <li><b>3</b>움직이지 말고 가만히 계세요. 박동마다 하트가 뛰고 파형에 표시돼요. 25초가 지나면 기록에 자동 저장되고, 「계속 측정」이 켜져 있으면 중지할 때까지 실시간으로 계속 보여줘요.</li>
     </ul>
   </section>
 
@@ -158,16 +200,19 @@
 <script>
 (() => {
   // ---------- 설정 ----------
-  const MEASURE_SEC = 25;      // 손가락 접촉 후 측정 시간
-  const WARMUP_SEC = 3;        // 노출/화이트밸런스 안정화 시간 (데이터 무시)
+  const MEASURE_SEC = 25;      // 이 시간이 지나면 결과를 기록에 저장
+  const WARMUP_SEC = 2;        // 노출/화이트밸런스 안정화 시간 (데이터 무시)
   const MIN_BPM = 40, MAX_BPM = 200;
-  const WINDOW_SEC = 12;       // 실시간 계산에 쓰는 구간
+  const WINDOW_SEC = 10;       // BPM 계산에 쓰는 최근 구간
   const SAMPLE_W = 40, SAMPLE_H = 30;
 
   // ---------- 엘리먼트 ----------
   const $ = id => document.getElementById(id);
   const video = $('video'), btn = $('btn'), statusEl = $('status'), bpmEl = $('bpm');
-  const heart = $('heart'), prog = $('prog'), wave = $('wave'), historyEl = $('history');
+  const heart = $('heart'), bigheart = $('bigheart'), glow = $('glow');
+  const prog = $('prog'), wave = $('wave'), historyEl = $('history');
+  const beatsEl = $('beats'), ibiEl = $('ibi'), instEl = $('inst');
+  const soundBtn = $('soundBtn'), contBtn = $('contBtn');
   const CIRC = 2 * Math.PI * 54;
 
   const sampler = document.createElement('canvas');
@@ -176,24 +221,55 @@
   const wctx = wave.getContext('2d');
 
   // ---------- 상태 ----------
-  let stream = null, track = null, running = false, rafId = null;
+  let stream = null, track = null, running = false, rafId = null, vfcId = null;
   let samples = [];            // {t, v}
   let contactStart = null;     // 손가락 접촉 시작 시각(ms)
-  let lastPeakT = 0;
-  let liveBpm = null;
+  let lastPeakT = 0, beatCount = 0, beatFlashT = -1;
+  let liveBpm = null, saved = false;
+  let soundOn = false, continuous = true, audioCtx = null;
+  let lastRes = { filtered: [], peaks: [] };
 
   // ---------- 유틸 ----------
   const setStatus = (msg, cls = '') => { statusEl.textContent = msg; statusEl.className = 'status ' + cls; };
   const setProgress = p => { prog.style.strokeDashoffset = CIRC * (1 - Math.max(0, Math.min(1, p))); };
   const median = a => { if (!a.length) return NaN; const s = [...a].sort((x, y) => x - y); const m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; };
+  const retrigger = (el, cls) => { el.classList.remove(cls); void el.getBoundingClientRect(); el.classList.add(cls); };
+  const rangeLabel = v => v < 60 ? '안정 시 낮은 편' : v <= 100 ? '정상 범위' : '안정 시 높은 편';
 
   function showBpm(v) {
     if (v == null || !isFinite(v)) { bpmEl.textContent = '--'; bpmEl.classList.add('dim'); return; }
     bpmEl.textContent = Math.round(v); bpmEl.classList.remove('dim');
   }
-  function pulse() {
-    heart.classList.remove('beat'); void heart.offsetWidth; heart.classList.add('beat');
-    if (navigator.vibrate) { /* 진동은 측정에 방해되므로 사용하지 않음 */ }
+  function resetLive() {
+    beatCount = 0; beatsEl.textContent = '0'; ibiEl.textContent = '-'; instEl.textContent = '-';
+  }
+
+  function beep() {
+    if (!soundOn) return;
+    try {
+      audioCtx ||= new (window.AudioContext || window.webkitAudioContext)();
+      const o = audioCtx.createOscillator(), g = audioCtx.createGain(), t = audioCtx.currentTime;
+      o.type = 'sine'; o.frequency.setValueAtTime(880, t); o.frequency.exponentialRampToValueAtTime(440, t + 0.09);
+      g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(0.25, t + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + 0.12);
+      o.connect(g).connect(audioCtx.destination); o.start(t); o.stop(t + 0.13);
+    } catch { /* 무시 */ }
+  }
+
+  // 박동 하나가 감지될 때마다 호출
+  function onBeat(peakT, prevT) {
+    beatCount++;
+    beatsEl.textContent = beatCount;
+    retrigger(heart, 'beat'); retrigger(bigheart, 'beat'); retrigger(glow, 'beat');
+    beatFlashT = performance.now();
+    beep();
+    if (prevT) {
+      const ibi = peakT - prevT;
+      if (ibi >= 60 / MAX_BPM && ibi <= 60 / MIN_BPM) {
+        ibiEl.textContent = ibi.toFixed(2) + '초';
+        instEl.textContent = Math.round(60 / ibi);
+      }
+    }
   }
 
   // ---------- 카메라 ----------
@@ -244,29 +320,40 @@
       video.hidden = false;
       await video.play();
       running = true;
-      samples = []; contactStart = null; liveBpm = null;
-      showBpm(null); setProgress(0);
+      samples = []; contactStart = null; liveBpm = null; saved = false; lastPeakT = 0;
+      lastRes = { filtered: [], peaks: [] };
+      resetLive(); showBpm(null); setProgress(0);
       btn.textContent = '중지'; btn.classList.add('stop');
       setStatus(r.torch ? '손가락으로 카메라와 플래시를 덮어주세요' : '플래시를 켤 수 없어요. 밝은 곳에서 손가락으로 카메라를 덮어주세요', r.torch ? '' : 'warn');
-      loop();
+      scheduleFrame();
+      rafId = requestAnimationFrame(render);
     } catch (e) {
       console.error(e);
       setStatus(e.name === 'NotAllowedError' ? '카메라 권한을 허용해주세요' : '카메라를 열 수 없습니다', 'warn');
-      stop(false);
+      stop();
     } finally {
       btn.disabled = false;
     }
   }
 
-  function stop(resetText = true) {
+  function stop() {
     running = false;
     if (rafId) cancelAnimationFrame(rafId);
+    if (vfcId && video.cancelVideoFrameCallback) video.cancelVideoFrameCallback(vfcId);
+    rafId = vfcId = null;
     if (track) setTorch(track, false);
     if (stream) stream.getTracks().forEach(t => t.stop());
     stream = null; track = null;
     video.srcObject = null; video.hidden = true;
     btn.textContent = '측정 시작'; btn.classList.remove('stop');
-    if (resetText) { setProgress(0); }
+  }
+
+  // 새 카메라 프레임이 들어올 때마다 한 번씩만 샘플링 (중복 프레임 방지)
+  const hasVFC = 'requestVideoFrameCallback' in HTMLVideoElement.prototype;
+  function scheduleFrame() {
+    if (!running) return;
+    if (hasVFC) vfcId = video.requestVideoFrameCallback(onFrame);
+    else setTimeout(onFrame, 1000 / 30);
   }
 
   // ---------- 프레임 처리 ----------
@@ -284,9 +371,9 @@
     return r > 90 && r > g * 1.6 && r > b * 1.6;
   }
 
-  function loop() {
+  function onFrame() {
     if (!running) return;
-    rafId = requestAnimationFrame(loop);
+    scheduleFrame();
     if (video.readyState < 2) return;
 
     const now = performance.now();
@@ -294,13 +381,14 @@
 
     if (!fingerOn(c)) {
       if (contactStart !== null) setStatus('손가락이 떨어졌어요. 다시 덮어주세요', 'warn');
-      contactStart = null; samples = []; liveBpm = null;
-      showBpm(null); setProgress(0); drawWave([]);
+      contactStart = null; samples = []; liveBpm = null; lastPeakT = 0;
+      lastRes = { filtered: [], peaks: [] };
+      showBpm(null); setProgress(0); resetLive();
       return;
     }
 
     if (contactStart === null) {
-      contactStart = now;
+      contactStart = now; saved = false;
       setStatus('신호 안정화 중… 움직이지 마세요');
     }
     const elapsed = (now - contactStart) / 1000;
@@ -312,24 +400,39 @@
     while (samples.length && samples[0].t < cutoff) samples.shift();
 
     const res = analyze(samples);
-    drawWave(res.filtered, res.peaks);
+    lastRes = res;
 
-    if (res.peaks.length) {
-      const lp = res.peaks[res.peaks.length - 1];
-      if (lp.t > lastPeakT + 0.2 && now / 1000 - lp.t < 0.5) { lastPeakT = lp.t; pulse(); }
+    // 새로 확정된 박동 → 실시간 표시
+    for (let i = 0; i < res.peaks.length; i++) {
+      const p = res.peaks[i];
+      if (p.t > lastPeakT + 60 / MAX_BPM && now / 1000 - p.t < 0.6) {
+        onBeat(p.t, i > 0 ? res.peaks[i - 1].t : null);
+        lastPeakT = p.t;
+      }
+    }
+
+    // BPM: 박동 몇 개만 잡혀도 바로 표시하고 점점 안정화
+    if (res.bpm) {
+      liveBpm = liveBpm == null ? res.bpm : liveBpm * 0.85 + res.bpm * 0.15;
+      showBpm(liveBpm);
     }
 
     const measured = elapsed - WARMUP_SEC;
-    setProgress(elapsed / (MEASURE_SEC + WARMUP_SEC));
-    if (measured > 5 && res.bpm) {
-      liveBpm = liveBpm == null ? res.bpm : liveBpm * 0.8 + res.bpm * 0.2;
-      showBpm(liveBpm);
-      setStatus(res.quality > 0.6 ? '측정 중… 좋은 신호입니다' : '측정 중… 손가락을 살짝만 대주세요', res.quality > 0.6 ? 'ok' : '');
-    } else if (measured <= 5) {
-      setStatus('측정 중…', 'ok');
+    setProgress(saved ? 1 : elapsed / (MEASURE_SEC + WARMUP_SEC));
+
+    if (!saved && measured >= MEASURE_SEC) {
+      saved = true;
+      if (liveBpm) saveHistory(Math.round(liveBpm));
+      if (!continuous) { finish(); return; }
     }
 
-    if (measured >= MEASURE_SEC) finish(res);
+    if (saved) {
+      setStatus(liveBpm ? `기록 저장됨 · ${rangeLabel(liveBpm)} · 실시간 표시 중` : '실시간 표시 중', 'ok');
+    } else if (!res.bpm) {
+      setStatus('박동 찾는 중…');
+    } else {
+      setStatus(res.quality > 0.6 ? '측정 중… 좋은 신호입니다' : '측정 중… 손가락을 살짝만 대주세요', res.quality > 0.6 ? 'ok' : '');
+    }
   }
 
   // ---------- 신호 분석 ----------
@@ -348,19 +451,27 @@
 
     out.filtered = sm.map((y, i) => ({ t: s[i].t, v: y }));
 
-    // 3) 피크 검출
+    // 3) 피크 검출 — 앞쪽은 넓게(0.25초), 뒤쪽은 짧게(0.12초) 봐서 박동을 빨리 확정
     const minGap = 60 / MAX_BPM;
-    const win = Math.max(2, Math.round(fps * 0.25));
-    const std = Math.sqrt(sm.reduce((a, y) => a + y * y, 0) / sm.length) || 1;
+    const winL = Math.max(2, Math.round(fps * 0.25));
+    const winR = Math.max(2, Math.round(fps * 0.12));
+    const recentN = Math.min(sm.length, Math.round(fps * 4));
+    const std = Math.sqrt(sm.slice(-recentN).reduce((a, y) => a + y * y, 0) / recentN) || 1;
+    // 자기상관으로 대략적인 주기를 먼저 구해, 맥파의 작은 두 번째 봉우리(중복맥)를 박동으로 오인하지 않게 함
+    const acBpm = dur > 2.5 ? autocorrBpm(sm, fps) : null;
+    const gap = acBpm ? Math.max(minGap, 0.6 * 60 / acBpm) : minGap;
+    let localMax = 0;
+    for (let i = sm.length - recentN; i < sm.length; i++) localMax = Math.max(localMax, sm[i]);
+    const thr = Math.max(std * 0.3, localMax * 0.45); // 작은 봉우리는 박동이 아님
     const peaks = [];
-    for (let i = win; i < sm.length - win; i++) {
+    for (let i = winL; i < sm.length - winR; i++) {
       const y = sm[i];
-      if (y < std * 0.3) continue;
+      if (y < thr) continue;
       let isMax = true;
-      for (let k = i - win; k <= i + win; k++) if (sm[k] > y) { isMax = false; break; }
+      for (let k = i - winL; k <= i + winR; k++) if (sm[k] > y) { isMax = false; break; }
       if (!isMax) continue;
       const t = s[i].t;
-      if (peaks.length && t - peaks[peaks.length - 1].t < minGap) {
+      if (peaks.length && t - peaks[peaks.length - 1].t < gap) {
         if (y > peaks[peaks.length - 1].v) peaks[peaks.length - 1] = { t, v: y };
         continue;
       }
@@ -374,13 +485,12 @@
     const ibis = [];
     for (let i = 1; i < recent.length; i++) ibis.push(recent[i].t - recent[i - 1].t);
     const valid = ibis.filter(x => x >= 60 / MAX_BPM && x <= 60 / MIN_BPM);
-    if (valid.length < 3) return out;
+    if (valid.length < 2) return out;
     const m = median(valid);
     const good = valid.filter(x => Math.abs(x - m) / m < 0.25);
     out.quality = good.length / ibis.length;
 
     // 5) 자기상관으로 교차검증 (피크 검출이 이중/누락될 때 보정)
-    const acBpm = autocorrBpm(sm, fps);
     let bpm = 60 / median(good.length ? good : valid);
     if (acBpm && Math.abs(acBpm - bpm) / bpm > 0.2 && out.quality < 0.7) bpm = acBpm;
     out.bpm = bpm;
@@ -412,55 +522,101 @@
       if (s > best) { best = s; bestLag = lag; }
     }
     if (best < 0.3) return null;
-    // 포물선 보간으로 세밀한 주기
+    // 2배 주기(절반 BPM)를 잡는 실수 방지: 절반 지연에서도 상관이 충분히 높으면 그쪽이 진짜 주기
+    for (;;) {
+      const h = Math.round(bestLag / 2);
+      if (h < minLag) break;
+      let hl = h, hv = r[h] ?? -1;
+      for (const k of [h - 1, h + 1]) if (k >= minLag && (r[k] ?? -1) > hv) { hv = r[k]; hl = k; }
+      if (hv > 0.65 * best && hv > 0.3) { bestLag = hl; best = hv; } else break;
+    }
     const a = r[bestLag - 1], b = r[bestLag], c = r[bestLag + 1];
     let lag = bestLag;
     if (a != null && c != null) { const den = a - 2 * b + c; if (den) lag += 0.5 * (a - c) / den; }
     return 60 * fps / lag;
   }
 
-  // ---------- 결과 ----------
-  function finish(res) {
-    const bpm = liveBpm ?? res.bpm;
-    stop(false);
+  // ---------- 결과 (계속 측정 끔일 때) ----------
+  function finish() {
+    stop();
     setProgress(1);
-    if (!bpm) {
+    if (!liveBpm) {
       showBpm(null);
       setStatus('신호가 약해 측정하지 못했어요. 다시 시도해주세요', 'warn');
       return;
     }
-    showBpm(bpm);
-    const v = Math.round(bpm);
-    const label = v < 60 ? '안정 시 낮은 편' : v <= 100 ? '정상 범위 (60–100)' : '안정 시 높은 편';
-    setStatus(`측정 완료 · ${label}`, 'ok');
-    saveHistory(v);
+    showBpm(liveBpm);
+    setStatus(`측정 완료 · ${rangeLabel(liveBpm)}`, 'ok');
   }
 
-  // ---------- 파형 그리기 ----------
+  // ---------- 파형 그리기 (화면 주사율로 부드럽게) ----------
   function sizeCanvas() {
     const dpr = window.devicePixelRatio || 1;
     wave.width = wave.clientWidth * dpr; wave.height = wave.clientHeight * dpr;
   }
+  function render() {
+    if (!running) return;
+    rafId = requestAnimationFrame(render);
+    drawWave(lastRes.filtered, lastRes.peaks);
+  }
   function drawWave(f, peaks = []) {
-    const W = wave.width, H = wave.height;
+    const W = wave.width, H = wave.height, dpr = window.devicePixelRatio || 1;
     wctx.clearRect(0, 0, W, H);
+
+    // 모니터 느낌의 격자
+    wctx.strokeStyle = 'rgba(255,255,255,.04)'; wctx.lineWidth = 1;
+    const step = 22 * dpr;
+    wctx.beginPath();
+    for (let x = 0; x < W; x += step) { wctx.moveTo(x, 0); wctx.lineTo(x, H); }
+    for (let y = 0; y < H; y += step) { wctx.moveTo(0, y); wctx.lineTo(W, y); }
+    wctx.stroke();
+
+    // 박동 순간 배경 번쩍
+    const since = performance.now() - beatFlashT;
+    if (beatFlashT > 0 && since < 300) {
+      wctx.fillStyle = `rgba(255,59,92,${0.12 * (1 - since / 300)})`;
+      wctx.fillRect(0, 0, W, H);
+    }
+
     if (f.length < 2) {
-      wctx.strokeStyle = '#2a2530'; wctx.lineWidth = 2 * (window.devicePixelRatio || 1);
+      wctx.strokeStyle = '#2a2530'; wctx.lineWidth = 2 * dpr;
       wctx.beginPath(); wctx.moveTo(0, H / 2); wctx.lineTo(W, H / 2); wctx.stroke();
       return;
     }
-    const span = 6; // 최근 6초만 표시
-    const t1 = f[f.length - 1].t, t0 = t1 - span;
+    const span = 5; // 최근 5초 표시, 오른쪽 끝이 '지금'
+    const t1 = performance.now() / 1000, t0 = t1 - span;
     const view = f.filter(p => p.t >= t0);
+    if (view.length < 2) return;
     let max = 1e-6; for (const p of view) max = Math.max(max, Math.abs(p.v));
     const X = t => (t - t0) / span * W, Y = v => H / 2 - v / max * H * 0.38;
-    const dpr = window.devicePixelRatio || 1;
+
+    // 선 아래 그라데이션
+    const grad = wctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, 'rgba(255,59,92,.28)'); grad.addColorStop(1, 'rgba(255,59,92,0)');
+    wctx.beginPath();
+    view.forEach((p, i) => i ? wctx.lineTo(X(p.t), Y(p.v)) : wctx.moveTo(X(p.t), Y(p.v)));
+    wctx.lineTo(X(view[view.length - 1].t), H); wctx.lineTo(X(view[0].t), H); wctx.closePath();
+    wctx.fillStyle = grad; wctx.fill();
+
     wctx.lineWidth = 2.5 * dpr; wctx.strokeStyle = '#ff3b5c'; wctx.lineJoin = 'round';
+    wctx.shadowColor = 'rgba(255,59,92,.8)'; wctx.shadowBlur = 8 * dpr;
     wctx.beginPath();
     view.forEach((p, i) => i ? wctx.lineTo(X(p.t), Y(p.v)) : wctx.moveTo(X(p.t), Y(p.v)));
     wctx.stroke();
+    wctx.shadowBlur = 0;
+
+    // 현재 위치 점
+    const last = view[view.length - 1];
     wctx.fillStyle = '#fff';
-    for (const p of peaks) if (p.t >= t0) { wctx.beginPath(); wctx.arc(X(p.t), Y(p.v), 3 * dpr, 0, Math.PI * 2); wctx.fill(); }
+    wctx.beginPath(); wctx.arc(X(last.t), Y(last.v), 3.5 * dpr, 0, Math.PI * 2); wctx.fill();
+
+    // 박동 표시
+    for (const p of peaks) if (p.t >= t0) {
+      wctx.strokeStyle = 'rgba(255,255,255,.18)'; wctx.lineWidth = 1 * dpr;
+      wctx.beginPath(); wctx.moveTo(X(p.t), 0); wctx.lineTo(X(p.t), H); wctx.stroke();
+      wctx.fillStyle = '#fff';
+      wctx.beginPath(); wctx.arc(X(p.t), Y(p.v), 3 * dpr, 0, Math.PI * 2); wctx.fill();
+    }
   }
 
   // ---------- 기록 ----------
@@ -482,10 +638,24 @@
   }
 
   // ---------- 이벤트 ----------
-  btn.addEventListener('click', () => running ? (stop(), setStatus('측정을 중지했어요'), showBpm(null)) : start());
+  btn.addEventListener('click', () => {
+    if (running) { stop(); setStatus('측정을 중지했어요'); showBpm(liveBpm); drawWave([]); }
+    else start();
+  });
+  soundBtn.addEventListener('click', () => {
+    soundOn = !soundOn;
+    soundBtn.textContent = soundOn ? '🔊 박동음 켬' : '🔈 박동음 끔';
+    soundBtn.classList.toggle('on', soundOn);
+    if (soundOn) { audioCtx ||= new (window.AudioContext || window.webkitAudioContext)(); audioCtx.resume(); }
+  });
+  contBtn.addEventListener('click', () => {
+    continuous = !continuous;
+    contBtn.textContent = continuous ? '∞ 계속 측정' : '⏱ 25초 측정';
+    contBtn.classList.toggle('on', continuous);
+  });
   $('clear').addEventListener('click', () => { localStorage.removeItem(KEY); renderHistory(); });
   document.addEventListener('visibilitychange', () => { if (document.hidden && running) { stop(); setStatus('화면을 벗어나 측정이 중지됐어요', 'warn'); } });
-  window.addEventListener('resize', () => { sizeCanvas(); drawWave([]); });
+  window.addEventListener('resize', () => { sizeCanvas(); drawWave(lastRes.filtered, lastRes.peaks); });
 
   sizeCanvas(); drawWave([]); renderHistory();
 })();
